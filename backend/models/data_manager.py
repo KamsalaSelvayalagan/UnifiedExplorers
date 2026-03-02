@@ -93,7 +93,7 @@ def register_user(name, email, password, fitness_data=None):
         password_hash = hash_password(password)
 
         if fitness_data:
-            # ✅ Use ML model (Option B)
+            # Use ML model 
             try:
                 from backend.ml.workout_plan_predictor import predict_plan
                 plan_id, plan_label = predict_plan(fitness_data)  # plan_id 1..15, label "Beginner 3"
@@ -126,8 +126,8 @@ def register_user(name, email, password, fitness_data=None):
                 fitness_data.get('workout_experience'),
                 fitness_data.get('workout_duration'),
                 fitness_data.get('weekly_frequency'),
-                plan_label,   # ✅ store "Beginner 3"
-                plan_id       # ✅ store 1..15
+                plan_label,   
+                plan_id       
             )
 
         else:
@@ -194,7 +194,7 @@ def get_workout_by_id(workout_id):
     try:
         cursor = connection.cursor()
         cursor.execute("""
-            SELECT workout_name, video_url, description
+            SELECT workout_name, description
             FROM workout
             WHERE workout_id = ?
         """, (workout_id,))
