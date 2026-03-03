@@ -55,6 +55,28 @@ class FitnessForm(QWidget):
     def show_error(self, title: str, message: str):
         QMessageBox.warning(self, title, message)
 
+    # ======================================================
+    #  ✅ NEW: Ask consent before storing fitness details
+    # ======================================================
+    def ask_storage_consent(self) -> bool:
+        """
+        Ask user consent to store fitness details before saving to DB.
+        Returns True only if user agrees.
+        """
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Consent Required")
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setText("Do you agree to store your fitness details in the database?")
+        msg.setInformativeText(
+            "We store these details to personalize your workout plan and track your progress.\n"
+            "If you do not agree, we cannot save your fitness details."
+        )
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        return msg.exec() == QMessageBox.StandardButton.Yes
+
     def init_ui(self):
         # ================= Scroll Area =================
         scroll = QScrollArea()
@@ -283,7 +305,7 @@ class FitnessForm(QWidget):
             row.addWidget(widget)
             row.addLayout(btn_layout)
             return container
-        
+
         # ================= DOB (force user selection) =================
         self.day_input = NoWheelComboBox()
         self.month_input = NoWheelComboBox()
@@ -574,6 +596,18 @@ class FitnessForm(QWidget):
             "workout_duration": duration,
             "weekly_frequency": frequency
         }
+
+        # ======================================================
+        # ✅ CONSENT CHECK (ONLY CHANGE IN SUBMIT FLOW)
+        # ======================================================
+        if not self.ask_storage_consent():
+            QMessageBox.warning(
+                self,
+                "Consent required",
+                "You must agree to store your fitness details before we can save them.\n"
+                "Please click 'Sign Up' again and choose 'Yes' to continue."
+            )
+            return
 
         self.formCompleted.emit(fitness_data)
 

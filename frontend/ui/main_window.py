@@ -77,12 +77,6 @@ class MainWindow(QMainWindow):
         self.Workout.logoutSignal.connect(self.on_logout)
         self.analytics_screen.logoutRequested.connect(self.on_logout)
 
-        # Workout session:
-        # - sessionEnded is used as "Exit to Workout" button in the session UI
-        self.workout_session.sessionEnded.connect(self.show_Workout)
-        # - nextWorkoutRequested is emitted when user clicks "Next" in the session UI
-        self.workout_session.nextWorkoutRequested.connect(self.on_workout_finished)
-
         self.profile_screen.backRequested.connect(self.show_Workout)
         self.analytics_screen.backRequested.connect(self.show_Workout)
 

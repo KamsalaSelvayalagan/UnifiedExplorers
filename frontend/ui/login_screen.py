@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QRect, QTimer
 from PyQt6.QtGui import QFont, QColor, QPalette, QPainter, QPainterPath, QLinearGradient
 
 import re
+from frontend.utils.validation import is_strong_password
 from backend.utils.email_service import generate_otp, send_otp, OTPInputDialog
 from backend.models.data_manager import (
     check_email_exists, 
@@ -149,18 +150,19 @@ class ForgotPasswordDialog(QMessageBox):
             return
             
         while True:
-            # Step 4: New Password
+            # Step 4: New Password with strong validation
             new_password, ok = QInputDialog.getText(
                 self.parent(), "New Password",
-                "Enter your new password (min 6 characters):",
+                "Enter your new password (min 8 characters, 1 capital, 1 small, 1 number):",
                 QLineEdit.EchoMode.Password
             )
             
             if not ok:
                 return
                 
-            if len(new_password) < 6:
-                QMessageBox.warning(self.parent(), "Validation Error", "Password must be at least 6 characters.")
+            is_strong, s_msg = is_strong_password(new_password)
+            if not is_strong:
+                QMessageBox.warning(self.parent(), "Validation Error", s_msg)
                 continue
 
             # Check if new password is same as old one
@@ -620,19 +622,13 @@ class LoginScreen(QWidget):
         password = self.register_password.text()
         confirm = self.register_confirm.text()
         
-        # Validation for primary password
         if not password:
             self.register_password.setStyleSheet(self.get_input_style())
             self.password_hint.setVisible(False)
             primary_ok = False
         else:
             self.password_hint.setVisible(True)
-            has_upper = any(c.isupper() for c in password)
-            has_lower = any(c.islower() for c in password)
-            has_digit = any(c.isdigit() for c in password)
-            has_length = len(password) >= 8
-            
-            primary_ok = has_upper and has_lower and has_digit and has_length
+            primary_ok, message = is_strong_password(password)
 
             if primary_ok:
                 self.register_password.setStyleSheet(self.get_input_style(border_color="#4CAF50")) # Green
@@ -640,7 +636,8 @@ class LoginScreen(QWidget):
                 self.password_hint.setStyleSheet("color: white; font-size: 11px; margin-left: 20px; font-weight: bold;")
             else:
                 self.register_password.setStyleSheet(self.get_input_style(border_color="#f44336")) # Red
-                self.password_hint.setText("Unstrong: Needs 8+ chars (1 Up, 1 Low, 1 Num)")
+                # If not strong, use the specific message from validation utility
+                self.password_hint.setText(f"Unstrong: {message}")
                 self.password_hint.setStyleSheet("color: white; font-size: 11px; margin-left: 20px; font-weight: bold;")
 
         # Validation for confirmation matching

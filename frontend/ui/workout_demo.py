@@ -9,13 +9,14 @@ from PyQt6.QtWidgets import (
     QPushButton, QFrame, QTextEdit, QDialog, QMessageBox,
     QSizePolicy, QSlider, QStyle
 )
-from PyQt6.QtCore import Qt, QUrl, QSize
+from PyQt6.QtCore import Qt, QUrl, QSize, QTimer
 from PyQt6.QtGui import QFont, QMovie, QPixmap
 
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 
 from backend.models import data_manager
+from backend.utils.unity_embedder import UnityEmbedder
 
 
 class WorkoutDemo(QWidget):
@@ -34,8 +35,13 @@ class WorkoutDemo(QWidget):
         super().__init__(parent)
 
         self.current_workout_id = None
+        self.current_workout_name = None
         self.camera_permission_granted = False
         self.movie = None
+        
+        # Unity embedder for Plank workout
+        self.unity_embedder = None
+        self.demo_container = None
 
         # Video
         self.player = QMediaPlayer(self)
@@ -71,6 +77,24 @@ class WorkoutDemo(QWidget):
 
         self.icon_play = None
         self.icon_pause = None
+        
+        # Background music player for Unity workouts
+        self.music_player = QMediaPlayer(self)
+        self.music_audio = QAudioOutput(self)
+        self._music_normal_volume = 0.35
+        self.music_audio.setVolume(self._music_normal_volume)
+        self.music_player.setAudioOutput(self.music_audio)
+        self.music_player.setLoops(QMediaPlayer.Loops.Infinite)
+        self.music_path = self._asset_path("audio.mp3")
+        
+        # Beep player for alerts
+        self.beep_player = QMediaPlayer(self)
+        self.beep_audio = QAudioOutput(self)
+        self.beep_audio.setVolume(1.0)
+        self.beep_player.setAudioOutput(self.beep_audio)
+        self.beep_path = self._asset_path("beep.mp3")
+        if os.path.exists(self.beep_path):
+            self.beep_player.setSource(QUrl.fromLocalFile(self.beep_path))
 
         self.init_ui()
         self.hook_player_signals()
@@ -177,6 +201,109 @@ class WorkoutDemo(QWidget):
             self.video_widget.setVisible(False)
 
     # ==================================================
+    # Unity Embedding (for Plank workout)
+    # ==================================================
+    def _get_pose_avatar_exe(self) -> str:
+        """Get path to PoseToAvatar.exe"""
+        app_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        return os.path.join(app_root, "UnityBuild", "PoseToAvatar.exe")
+
+    def _init_unity_embedder(self) -> bool:
+        """Initialize the Unity embedder"""
+        if self.unity_embedder is not None:
+            return True  # Already initialized
+        
+        exe_path = self._get_pose_avatar_exe()
+        if not os.path.exists(exe_path):
+            self.show_dialog("Error", f"Unity EXE not found: {exe_path}")
+            return False
+        
+        # Use demo_container as the embedding container
+        self.unity_embedder = UnityEmbedder(self.demo_container, exe_path)
+        
+        # Connect signals
+        self.unity_embedder.started.connect(self._on_unity_started)
+        self.unity_embedder.stopped.connect(self._on_unity_stopped)
+        self.unity_embedder.error.connect(self._on_unity_error)
+        
+        return True
+    
+    def _launch_unity(self) -> bool:
+        """Launch Unity application"""
+        if not self._init_unity_embedder():
+            return False
+        
+        # Hide demo UI and launch Unity
+        self.demo_container.setVisible(False)
+        self._pause_preview()
+        
+        if self.unity_embedder.start():
+            print("WorkoutDemo: Unity launcher initiated")
+            # Start background music when Unity starts
+            self._start_music()
+            return True
+        return False
+    
+    def _stop_unity(self):
+        """Stop Unity application"""
+        if self.unity_embedder is not None:
+            self.unity_embedder.stop()
+        self.demo_container.setVisible(True)
+    
+    def _on_unity_started(self):
+        """Called when Unity successfully embeds"""
+        print("WorkoutDemo: Unity app started and embedded")
+    
+    def _on_unity_stopped(self):
+        """Called when Unity stops - stop music and beeps"""
+        print("WorkoutDemo: Unity app stopped")
+        self._stop_music()
+        self.demo_container.setVisible(True)
+    
+    def _on_unity_error(self, error_msg: str):
+        """Called when Unity embedding fails"""
+        print(f"WorkoutDemo: Unity error: {error_msg}")
+        self.demo_container.setVisible(True)
+        self.show_dialog("Error", f"Failed to launch Unity: {error_msg}")
+
+    # ==================================================
+    # Background Music & Sound Effects
+    # ==================================================
+    def _start_music(self):
+        """Start looping background music while Unity is running"""
+        if not self.music_path or not os.path.exists(self.music_path):
+            return
+
+        # If already playing, do nothing
+        if self.music_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            return
+
+        self.music_player.setSource(QUrl.fromLocalFile(self.music_path))
+        self.music_player.play()
+
+    def _stop_music(self):
+        """Stop background music safely"""
+        try:
+            if self.music_player.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
+                self.music_player.stop()
+        except Exception:
+            pass
+
+    def _play_beep(self):
+        """Play beep sound alert"""
+        try:
+            if os.path.exists(self.beep_path):
+                self.beep_player.stop()
+                self.beep_audio.setVolume(1.0)
+                self.beep_player.play()
+            else:
+                from PyQt6.QtWidgets import QApplication
+                QApplication.beep()
+        except Exception:
+            from PyQt6.QtWidgets import QApplication
+            QApplication.beep()
+
+    # ==================================================
     # Auto pause/stop on screen change / close
     # ==================================================
     def hideEvent(self, event):
@@ -236,15 +363,15 @@ class WorkoutDemo(QWidget):
         content_layout.setSpacing(30)
 
         # ================= Preview Section =================
-        preview_container = QFrame()
-        preview_container.setStyleSheet("""
+        self.demo_container = QFrame()
+        self.demo_container.setStyleSheet("""
             QFrame {
                 background: white;
                 border: 1px solid #dddddd;
                 border-radius: 16px;
             }
         """)
-        preview_layout = QVBoxLayout(preview_container)
+        preview_layout = QVBoxLayout(self.demo_container)
         preview_layout.setContentsMargins(20, 20, 20, 20)
         preview_layout.setSpacing(12)
 
@@ -390,7 +517,7 @@ class WorkoutDemo(QWidget):
         preview_layout.addWidget(self.video_widget, 1)
         preview_layout.addWidget(self.controls_container, 0)
 
-        content_layout.addWidget(preview_container, 2)
+        content_layout.addWidget(self.demo_container, 2)
 
         # ================= Info Section =================
         info_container = QFrame()
@@ -485,6 +612,10 @@ class WorkoutDemo(QWidget):
         # assets are:   frontend/assets/
         frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         return os.path.join(frontend_dir, "assets", filename)
+    
+    def _asset_path(self, filename: str) -> str:
+        """Alias for assets_path for consistency"""
+        return self.assets_path(filename)
 
     @staticmethod
     def normalize_name(name: str) -> str:
@@ -504,8 +635,9 @@ class WorkoutDemo(QWidget):
             self.show_dialog("Not Found", "Workout not found", QMessageBox.Icon.Warning)
             return
 
-        # expected: (name, muscles?, description)
-        workout_name, _, description = row
+        # expected: (name, description)
+        workout_name, description = row
+        self.current_workout_name = workout_name
 
         self.title_label.setText(workout_name)
         self.muscles_label.setText(workout_name)
@@ -698,14 +830,19 @@ class WorkoutDemo(QWidget):
         # pause preview BEFORE permission dialog
         self._pause_preview()
 
-        self.open_camera_screen()
-    
-    
-
-    def open_camera_screen(self):
-        main_win = self.window()
-        if hasattr(main_win, "show_workout_session"):
-            main_win.show_workout_session(self.current_workout_id)
+        # Check if this is a plank workout
+        is_plank = (self.current_workout_name.strip().lower() == "plank" 
+                   if self.current_workout_name else False)
+        
+        if is_plank:
+            # For plank: launch Unity app directly
+            if self._launch_unity():
+                print("Plank workout started with Unity")
+            else:
+                self.show_dialog("Error", "Failed to launch Unity for Plank workout")
+        else:
+            # For other workouts: show coming soon message
+            self.show_dialog("Coming Soon", "Camera-based workouts coming soon!\nFor now, only Plank with Unity is available.")
 
     def go_back(self):
         self._pause_preview()

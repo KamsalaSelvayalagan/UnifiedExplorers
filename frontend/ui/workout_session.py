@@ -1,5 +1,5 @@
 # =========================================
-# workout_session.py  (FULLY CORRECTED + BACKGROUND MUSIC)
+# workout_session.py  (FULLY CORRECTED + BACKGROUND MUSIC + AUDIBLE BEEP)
 # =========================================
 """
 Workout Session UI with live camera feedback and guided workflow.
@@ -11,6 +11,7 @@ Workout Session UI with live camera feedback and guided workflow.
 - Toast stays until user clicks Stop
 - Toast border will NOT hide under the camera section (QVideoWidget native overlay fix)
 - ✅ Background music (assets/audio.mp3) plays ONLY while camera session is running
+- ✅ FIX: When target time reached -> background music volume reduces + beep becomes audible
 """
 
 import os
@@ -21,9 +22,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QTime, QUrl, QSize
 from PyQt6.QtGui import QFont, QMovie, QIcon, QPixmap
 from PyQt6.QtMultimedia import (
-    QCamera, QMediaCaptureSession, QAudioOutput, QMediaPlayer, QSoundEffect
+    QCamera, QMediaCaptureSession, QAudioOutput, QMediaPlayer
 )
 from PyQt6.QtMultimediaWidgets import QVideoWidget
+from backend.utils.unity_embedder import UnityEmbedder
 
 
 class WorkoutSession(QWidget):
@@ -49,7 +51,11 @@ class WorkoutSession(QWidget):
         self.current_index = -1   # workout_id
         self.camera_permission_granted = False
         self.camera_active = False
+        self.session_active = False  # Track if any session (camera or Unity) is running
         self.movie = None
+        
+        # Unity embedder for Plank workout (initialized after UI setup)
+        self.unity_embedder = None
 
         # ---------- Camera / Multimedia ----------
         self.camera = QCamera()
@@ -76,19 +82,26 @@ class WorkoutSession(QWidget):
         # ✅ Background music player (NOT muted)
         self.music_player = QMediaPlayer(self)
         self.music_audio = QAudioOutput(self)
-        self.music_audio.setVolume(0.35)  # adjust volume (0.0 - 1.0)
+
+        # keep your original music level as "normal"
+        self._music_normal_volume = 0.35
+        self.music_audio.setVolume(self._music_normal_volume)
+
         self.music_player.setAudioOutput(self.music_audio)
         self.music_player.setLoops(QMediaPlayer.Loops.Infinite)
 
         # Resolve music path (same style as other assets)
         self.music_path = self._asset_path("audio.mp3")
 
-        # Beep sound (reliable)
-        self.beep_sound = QSoundEffect(self)
-        beep_path = self._asset_path("beep.wav")
-        if os.path.exists(beep_path):
-            self.beep_sound.setSource(QUrl.fromLocalFile(beep_path))
-            self.beep_sound.setVolume(0.8)
+        # 1) Reliable beep player using QMediaPlayer (MP3 works reliably here)
+        self.beep_player = QMediaPlayer(self)
+        self.beep_audio = QAudioOutput(self)
+        self.beep_audio.setVolume(1.0)  # max allowed (0.0 - 1.0)
+        self.beep_player.setAudioOutput(self.beep_audio)
+
+        self.beep_path = self._asset_path("beep.mp3")
+        if os.path.exists(self.beep_path):
+            self.beep_player.setSource(QUrl.fromLocalFile(self.beep_path))
 
         self.init_ui()
 
@@ -127,7 +140,109 @@ class WorkoutSession(QWidget):
         except Exception:
             pass
 
-    # ---------------- UI ----------------
+    # ---------------- ✅ Music ducking + beep helpers (new, minimal) ----------------
+    def _duck_music_for_beep(self):
+        """Reduce music so beep is clearly audible."""
+        try:
+            # lower to a small value temporarily
+            self.music_audio.setVolume(0.05)
+        except Exception:
+            pass
+
+    def _restore_music_after_beep(self):
+        """Restore music to normal volume."""
+        try:
+            self.music_audio.setVolume(self._music_normal_volume)
+        except Exception:
+            pass
+
+    def _play_beep_audible(self):
+        """
+        Play beep loudly and reliably using QMediaPlayer.
+        """
+        # Duck background music first
+        self._duck_music_for_beep()
+
+        try:
+            if os.path.exists(self.beep_path):
+                # QMediaPlayer: stop->play to ensure it restarts every time
+                self.beep_player.stop()
+                self.beep_audio.setVolume(1.0)
+                self.beep_player.play()
+            else:
+                # Absolute fallback if file is missing
+                QApplication.beep()
+        except Exception:
+            # Final fallback
+            QApplication.beep()
+
+        # Restore music shortly after beep starts
+        QTimer.singleShot(1200, self._restore_music_after_beep)
+
+    # -------- Unity Embedding (Clean Integration) --------
+    def _get_pose_avatar_exe(self) -> str:
+        """Get path to PoseToAvatar.exe"""
+        app_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        return os.path.join(app_root, "UnityBuild", "PoseToAvatar.exe")
+
+    def _init_unity_embedder(self):
+        """Initialize the Unity embedder"""
+        if self.unity_embedder is not None:
+            return  # Already initialized
+        
+        exe_path = self._get_pose_avatar_exe()
+        self.unity_embedder = UnityEmbedder(self.video_container, exe_path)
+        
+        # Connect signals
+        self.unity_embedder.started.connect(self._on_unity_started)
+        self.unity_embedder.stopped.connect(self._on_unity_stopped)
+        self.unity_embedder.error.connect(self._on_unity_error)
+    
+    def _launch_unity(self):
+        """Launch Unity application"""
+        self._init_unity_embedder()
+        
+        # Hide camera and launch Unity
+        self.video_widget.setVisible(False)
+        if self.unity_embedder.start():
+            print("Unity launcher initiated")
+    
+    def _stop_unity(self):
+        """Stop Unity application"""
+        if self.unity_embedder is not None:
+            self.unity_embedder.stop()
+        self.video_widget.setVisible(True)
+    
+    def _on_unity_started(self):
+        """Called when Unity successfully embeds"""
+        print("WorkoutSession: Unity app started and embedded")
+    
+    def _on_unity_stopped(self):
+        """Called when Unity stops - automatically end the session"""
+        print("WorkoutSession: Unity app stopped")
+        self.video_widget.setVisible(True)
+        
+        # Stop timer and music
+        self.stopwatch_timer.stop()
+        self._stop_music()
+        self.hide_target_toast()
+        
+        # Mark session as inactive
+        self.session_active = False
+        
+        # Update UI to show Next Workout button
+        self.set_start_style()
+        self.next_btn.setVisible(True)
+    
+    def _on_unity_error(self, error_msg: str):
+        """Called when Unity embedding fails - show camera instead"""
+        print(f"WorkoutSession: Unity error: {error_msg}")
+        self.video_widget.setVisible(True)
+        # Fallback: start camera feed if Unity fails
+        if not self.camera_active:
+            self.camera.start()
+            self.camera_active = True
+
     def init_ui(self):
         self.setStyleSheet("background-color: #0f0c29;")
 
@@ -362,18 +477,13 @@ class WorkoutSession(QWidget):
         self.video_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.video_container.setMinimumHeight(320)
 
-        # ✅ FIX: prevent native window stacking issues so toast can overlay above camera
-        self.video_container.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
-        self.video_container.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, False)
+        # ✅ IMPORTANT: Enable native window for Unity embedding
+        self.video_container.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
 
         video_layout = QVBoxLayout(self.video_container)
         video_layout.setContentsMargins(0, 0, 0, 0)
 
         self.video_widget = QVideoWidget()
-
-        # ✅ FIX: allow overlay widgets (toast) to appear above the video
-        self.video_widget.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
-        self.video_widget.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, False)
 
         self.video_widget.setStyleSheet("background: transparent; border-radius: 18px;")
         self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -551,6 +661,9 @@ class WorkoutSession(QWidget):
         self.target_reached = False
         self.hide_target_toast()
         self.reset_session()
+        
+        # Stop Unity when loading a new workout (will launch on Start)
+        self._stop_unity()
 
     # ---------------- Demo Media ----------------
     def on_demo_media_error(self, error, error_string):
@@ -647,7 +760,7 @@ class WorkoutSession(QWidget):
         """)
 
     def toggle_session(self):
-        if not self.camera_active:
+        if not self.session_active:
             self.start_session()
         else:
             self.stop_session()
@@ -710,13 +823,25 @@ class WorkoutSession(QWidget):
             self.next_btn.setVisible(False)
             return
 
-        # ✅ Start camera + timer + music
-        self.camera.start()
-        self.camera_active = True
+        # Check if this is a plank workout
+        is_plank = (self.current_workout.get("name", "").strip().lower() == "plank" 
+                   if self.current_workout else False)
+        
+        if is_plank:
+            # For plank: launch Unity app instead of camera
+            self._launch_unity()
+        else:
+            # For other workouts: start camera feed
+            self.camera.start()
+            self.camera_active = True
+        
+        # Mark session as active
+        self.session_active = True
+        
+        # Start timer, styling, and music for all workouts
         self.stopwatch_timer.start(1000)
         self.set_stop_style()
         self.next_btn.setVisible(False)
-
         self._start_music()
 
     def stop_session(self):
@@ -725,10 +850,17 @@ class WorkoutSession(QWidget):
 
         # ✅ Stop music when user stops session
         self._stop_music()
+        
+        # Stop Unity when stopping session
+        self._stop_unity()
 
-        self.camera.stop()
-        self.camera_active = False
+        # Only stop camera if it was started (non-plank workouts)
+        if self.camera_active:
+            self.camera.stop()
+            self.camera_active = False
+            
         self.stopwatch_timer.stop()
+        self.session_active = False
         self.set_start_style()
         self.next_btn.setVisible(True)
 
@@ -739,8 +871,12 @@ class WorkoutSession(QWidget):
 
         # ✅ Always stop music when resetting
         self._stop_music()
+        
+        # Stop Unity when resetting
+        self._stop_unity()
 
         self.stopwatch_timer.stop()
+        self.session_active = False
         self.set_start_style()
         self.next_btn.setVisible(False)
 
@@ -764,18 +900,19 @@ class WorkoutSession(QWidget):
             if elapsed >= int(self.target_seconds):
                 self.target_reached = True
 
-                # Beep once
-                try:
-                    if self.beep_sound.source().isValid():
-                        self.beep_sound.play()
-                    else:
-                        QApplication.beep()
-                except Exception:
-                    QApplication.beep()
+                # ✅ FIX: Duck music + play beep clearly
+                self._play_beep_audible()
 
                 # Non-blocking toast (no OK)
                 self.show_target_toast("Target time reached!")
-
+    # -------- Cleanup --------
+    def closeEvent(self, event):
+        """Cleanup when widget closes"""
+        self._stop_unity()
+        self._stop_music()
+        if self.camera_active:
+            self.camera.stop()
+        super().closeEvent(event)
     # ---------------- Navigation Buttons ----------------
     def on_analytics_clicked(self):
         main_win = self.window()

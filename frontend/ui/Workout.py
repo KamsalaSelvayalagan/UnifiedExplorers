@@ -6,7 +6,7 @@ Professional UI with glassmorphism effects and high-quality layout
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QFrame, QGridLayout, QMessageBox, QSizePolicy, QScrollArea
+    QPushButton, QFrame, QGridLayout, QMessageBox, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
@@ -18,6 +18,7 @@ from backend.models.data_manager import (
     WORKOUT_COLUMNS
 )
 from backend.utils.activity_tracker import update_last_activity
+from backend.models.data_manager import plan_level_and_index
 
 
 class Workout(QWidget):
@@ -92,22 +93,6 @@ class Workout(QWidget):
 
         main_layout.addWidget(nav_bar)
 
-        # ---------------- Scrollable page (Responsive) ----------------
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-
-        page = QWidget()
-        page.setStyleSheet("background: transparent;")
-        page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(0, 0, 0, 0)
-        page_layout.setSpacing(0)
-
-        scroll.setWidget(page)
-        main_layout.addWidget(scroll, 1)
-
         # ---------------- TOP ROW: TRAINEE INFO + LOGOUT ----------------
         top_row_container = QWidget()
         top_row_container.setStyleSheet("background: transparent; border: none;")
@@ -177,14 +162,14 @@ class Workout(QWidget):
         self.logout_btn.clicked.connect(self.logoutSignal.emit)
         top_row.addWidget(self.logout_btn)
 
-        page_layout.addWidget(top_row_container)
+        main_layout.addWidget(top_row_container)
 
         # ---------------- MAIN CONTAINER ----------------
         self.grid_container = QWidget()
         self.grid_layout = QGridLayout(self.grid_container)
         self.grid_layout.setContentsMargins(50, 20, 50, 40)
         self.grid_layout.setSpacing(40)
-        page_layout.addWidget(self.grid_container)
+        main_layout.addWidget(self.grid_container)
 
     # ------------------- DATA HANDLING -------------------
     def set_user(self, user_data: dict):
@@ -205,7 +190,9 @@ class Workout(QWidget):
             return
 
         self.welcome_label.setText(f"Trainee: {self.trainee.get('name', 'User')}")
-        self.plan_label.setText(f"Plan: {self.trainee.get('fitness_level', 'Custom')}")
+        plan_id = self.trainee.get("plan_id", 1)
+        main_level, _ = plan_level_and_index(plan_id)
+        self.plan_label.setText(f"Plan: {main_level}")
 
         plan_id = self.trainee.get("plan_id")
         self.workouts = get_workout_plan(plan_id) if plan_id else []
@@ -374,24 +361,23 @@ class Workout(QWidget):
         self.grid_layout.addWidget(container, 0, 0)
 
     def start_workout_safely(self):
-        """Start the first workout in the plan (unlocked)."""
+        """Start the first workout in the plan (unlocked) - go to demo screen."""
         if not self.workouts:
             QMessageBox.information(self, "No Workouts", "No workout plan found for this user.")
             return
 
         first = self.workouts[0]
         workout_id = first.get("workout_id")
-        workout_name = first.get("name", "Workout")
 
         if workout_id is None:
-            QMessageBox.warning(self, "Not Available", "Workout session screen is not connected.")
+            QMessageBox.warning(self, "Not Available", "Workout demo screen is not connected.")
             return
 
         main_win = self.window()
-        if hasattr(main_win, "show_workout_session"):
-            main_win.show_workout_session(workout_id, workout_name)
+        if hasattr(main_win, "show_workout_demo"):
+            main_win.show_workout_demo(workout_id)
         else:
-            QMessageBox.warning(self, "Not Available", "Workout session screen is not connected.")
+            QMessageBox.warning(self, "Not Available", "Workout demo screen is not connected.")
 
     # ---------------- SESSION TRACKING ----------------
 

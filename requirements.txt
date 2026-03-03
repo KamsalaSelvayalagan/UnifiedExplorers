@@ -1,0 +1,7 @@
+PyQt6
+PyQt6-WebEngine
+PyQt6-Multimedia
+PyQt6-MultimediaWidgets
+pandas
+joblib
+scikit-learn
